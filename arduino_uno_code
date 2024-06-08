@@ -1,0 +1,149 @@
+/***************************************************************************
+//CPEG/ELEG298 S24 ClimaLED Temperature sensor IoT Device
+//written by Ashley Okafor 05/04/2024
+
+//This program uses two LED indicators to blink in a specific sequence to indicate
+ to indicate whether the environment is too hot or cold based on predefined thresholds.
+ 
+ ***************************************************************************/
+#include "Arduino.h" // Arduino library
+#include <SoftwareSerial.h> //Allows us to use two GPIO pins for a second UART
+#include "Arduino_SensorKit.h" //Arduino sensorkit library 
+#include <DHT20.h> //DHT20 temperature/humidity library
+#include <Wire.h> //I2C library
+
+
+#define Environment Environment_I2C // Defining the environment as Environment_I2C
+#define RESET_PIN 8 //Pin used to reset the ESP-01S WiFi module 
+
+
+
+DHT20 DHT;
+
+
+//in celcius
+float hot_cel = 25.0; //set hot parameter - 77F
+float cold_cel = 23.4; //set   cold parameter 74.12F
+
+SoftwareSerial espSerial(10, 11);  //Create software UART to talk to the ESP8266
+String IO_USERNAME = "redacted";
+String IO_KEY = "redacted";
+String WIFI_SSID = "UD Devices";  //Only need to change if using other network, eduroam won't work with ESP8266
+String WIFI_PASS = "";            //Blank for open network
+float temp;
+
+void setup() {
+  Serial.begin(115200);     // set up serial monitor with 115200 baud rate
+  espSerial.begin(9600);  // set up software UART to ESP8266 @ 9600 baud rate
+  Environment.begin();
+  Wire.begin();
+  Serial.println("setting up");
+  pinMode(A2, INPUT); //temperature sensor
+  pinMode(12, OUTPUT); //green and red connected to pin 12
+
+  pinMode(RESET_PIN, OUTPUT);
+  digitalWrite(RESET_PIN, LOW);
+  delay(500);
+  digitalWrite(RESET_PIN, HIGH);
+  delay(500);
+
+  String resp = espData("get_macaddr", 2000, true);      //get MAC address of 8266
+  resp = espData("wifi_ssid=" + WIFI_SSID, 2000, true);  //send Wi-Fi SSID to connect to
+  resp = espData("wifi_pass=" + WIFI_PASS, 2000, true);  //send password for Wi-Fi network
+  resp = espData("io_user=" + IO_USERNAME, 2000, true);  //send Adafruit IO info
+  resp = espData("io_key=" + IO_KEY, 2000, true);
+  resp = espData("setup_io", 30000, true);  //setup the IoT connection
+  if (resp.indexOf("connected") < 0) {
+    Serial.println("\nAdafruit IO Connection Failed");
+    while (1)
+      ; 
+  }
+  resp = espData("setup_feed=1,CPEG-Final", 2000, false);  //start the data feed
+  Serial.println("------ Setup Complete ----------");
+}
+
+void loop() {
+// free version of Adafruit IO only allows 30 uploads/minute, it discards everything else
+
+//code goes in here 
+
+
+int sensor = analogRead(A2);
+float tempC = Environment.readTemperature();
+
+//convert to celsius to fahrenheit
+float tempF = (tempC * 1.8) + 32;
+float hotF = (hot_cel * 1.8) + 32;
+float coldF = (cold_cel * 1.8) + 32; 
+
+
+Serial.print("Temperature in Celsius: ");
+Serial.println(tempC); //print temperature in C
+Serial.print("Temperature in Fahrenheit: ");
+Serial.print(tempF); //print temperature in F
+
+//AdaFruit Io
+String tempFString = String(tempF);
+String resp = espData("send_data=1," + tempFString, 2000, false);
+delay(5000);  // Wait 5 seconds between uploads
+
+
+//In the cold state. 
+if (tempF < coldF) { 
+  Serial.println(" It's Cold.");
+   for (int i = 0; i < 7; i++) {
+        digitalWrite(12, HIGH); // Turn on the LEDs connected to pin 12
+        delay(200); // Keep them on for 200 milliseconds
+        digitalWrite(12, LOW); // Turn off the LEDs connected to pin 12
+        delay(200); // Keep them off for 200 milliseconds
+    }
+}
+
+//In the hot state. 
+else   if (tempF >= hotF) { //hot
+  Serial.println(" It's Hot.");
+  for (int i = 0; i < 5; i++) { // Repeat the blink 5 times, adjust as needed
+        digitalWrite(12, HIGH); // Turn on both LEDs connected to pin 12
+        delay(400); // Keep them on for 400 milliseconds, adjust as needed
+        digitalWrite(12, LOW); // Turn off both LEDs connected to pin 12
+        delay(400); // Keep them off for 400 milliseconds, adjust as needed
+        if (tempF < hotF) {
+            Serial.println("Temperature left hot state.");
+            break;
+    }
+  }
+}
+
+//Within range. 
+else {
+  Serial.println("Temperature within range.");
+    for (int i = 0; i < 2; i++){
+      digitalWrite(12, HIGH); // Turn on both LEDs connected to pin 12
+      delay(700); // Keep them on for 400 milliseconds, adjust as needed
+      digitalWrite(12, LOW); // Turn off both LEDs connected to pin 12
+      delay(700);
+      if (tempF < coldF || tempF >= hotF) {
+          break;
+      }
+    }
+  }
+}
+
+
+String espData(String command, const int timeout, boolean debug) {
+  String response = "";
+  espSerial.println(command);  //send data to ESP8266 using serial UART
+  long int time = millis();
+  while ((time + timeout) > millis()) {  //wait the timeout period sent with the command
+    while (espSerial.available()) {      //look for response from ESP8266
+      char c = espSerial.read();
+      response += c;
+      Serial.print(c);  //print response on serial monitor
+    }
+  }
+  if (debug) {
+    Serial.println("Resp: " + response);
+  }
+  response.trim();
+  return response;
+}
